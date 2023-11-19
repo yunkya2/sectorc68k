@@ -210,18 +210,15 @@ compile_expr_tok_next:
 compile_expr:
     bsr     compile_unary           ; compile left-hand side
 
-    lea.l   binary_oper_tbl(pc),a2  ; load ptr to operator table
+    lea.l   binary_oper_tbl-2(pc),a2 ; load ptr to operator table
+    moveq.l #14-1,d4                ; number of the operator table items - 1
 _check_next:
-    cmp.w   (a2),d1                 ; matches token?
-    beq     _found
-    tst.w   (a2)                    ; end of table?
-    addq.l  #4,a2
-    bne     _check_next
+    addq.l  #2,a2
+    cmp.w   (a2)+,d1                ; matches token?
+    dbeq    d4,_check_next
+    bne     _not_found              ; all-done, not found
 
-    rts                             ; all-done, not found
-
-_found:
-    move.w  2(a2),-(sp)             ; load 16-bit of machine-code and save it to the stack
+    move.w  (a2),-(sp)              ; load 16-bit of machine-code and save it to the stack
     move.w  #$3f00,(a1)+            ; emit "move.w d0,-(sp)"
     jsr     (a4)                    ; consume operator token
     bsr     compile_unary           ; compile right-hand side
@@ -239,6 +236,7 @@ emit_cmp_op:
 
 emit_op:
     move.w  d1,(a1)+                ; emit machine code for op
+_not_found:
     rts
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -406,8 +404,7 @@ binary_oper_tbl:
     .dc.w   TOK_GT,$5ec0        ; sgt d0
     .dc.w   TOK_LE,$5fc0        ; sle d0
     .dc.w   TOK_GE,$5cc0        ; sge d0
-    .dc.w   0                   ; [sentinel]
-
+    ;; if the number of items is changed, compile_expr needs to be fixed
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
