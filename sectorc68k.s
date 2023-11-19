@@ -175,14 +175,13 @@ compile_assign:
 
 compile_store_deref:
     move.w  d5,d1                   ; restore dest var token
-    move.w  #$3180,d0               ; code for "move.w d0,(a0,d6.w)"
+    move.w  #$3180,-(sp)            ; code for "move.w d0,(a0,d6.w)"
     ;; [fall-through]
 
 emit_common_ptr_op:
-    move.w  d0,-(sp)
-    move.w  #$3c28,d0               ; emit "move.w imm(a0),d6"
+    move.w  #$3c28,(a1)+            ; emit "move.w imm(a0),d6"
     bsr     emit_var
-    move.w  (sp)+,(a1)+             ; emit
+    move.w  (sp)+,(a1)+             ; emit load/store dereference 
     move.w  #$6000,(a1)+            ; emit addressing word for "(a0,d6.w)"
     rts
 
@@ -192,7 +191,7 @@ _not_deref_store:
 
 compile_store:
     move.w  d5,d1                   ; restore dest var token
-    move.w  #$3140,d0               ; code for "move.w d0,imm(a0)"
+    move.w  #$3140,(a1)+            ; code for "move.w d0,imm(a0)"
     bra     emit_var                ; [tail-call]
 
 save_var_and_compile_expr:
@@ -247,7 +246,7 @@ compile_unary:
     bne     _not_deref
     ;; compile deref (load)
     bsr     tok_next                ; consume "*(int*)"
-    move.w  #$3030,d0               ; code for "move.w (a0,d6.w),d0"
+    move.w  #$3030,-(sp)            ; code for "move.w (a0,d6.w),d0"
     bra     emit_common_ptr_op      ; [tail-call]
 
 _not_deref:
@@ -260,7 +259,7 @@ _not_paren:
     cmpi.w  #TOK_ADDR,d1            ; check for "&"
     bne     _not_addr
     bsr     tok_next                ; consume "&"
-    move.w  #$303c,d0               ; code for "move.w #imm,d0"
+    move.w  #$303c,(a1)+            ; code for "move.w #imm,d0"
     bra     emit_var                ; [tail-call] to emit code
 
 _not_addr:
@@ -271,11 +270,10 @@ _not_addr:
 
 _not_int:
     ;; compile var
-    move.w  #$3028,d0               ; code for "move.w imm(a0),d0"
+    move.w  #$3028,(a1)+            ; code for "move.w imm(a0),d0"
     ;; [fall-through]
 
 emit_var:
-    move.w  d0,(a1)+                ; emit
     add.w   d1,d1                   ; bx = 2*bx (scale up for 16-bit)
     ;; [fall-through]
 
