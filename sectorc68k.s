@@ -291,8 +291,9 @@ tok_next2:
     bsr     tok_next
     ;; [fall-through]
 tok_next:
+    moveq.l #' ',d4
     bsr     getch
-    cmpi.b  #' ',d0                 ; skip spaces (anything <= ' ' is considered space)
+    cmp.b   d4,d0                   ; skip spaces (anything <= ' ' is considered space)
     ble     tok_next
 
     moveq.l #0,d1                   ; zero token reg
@@ -302,14 +303,16 @@ tok_next:
     sle.b   d2                      ; tok_is_num = (d0 <= '9')
 
 _nextch:
-    cmpi.b  #' ',d0
+    cmp.b   d4,d0
     ble     _done                   ; if char is space then break
 
     lsl.w   #8,d3
     move.b  d0,d3                   ; shift this char into d3
 
+    .ifndef NOHEX
     cmpi.w  #$3078,d3               ; "0x"
     beq     _nextch16
+    .endif
 
     mulu.w  #10,d1
     subi.w  #'0',d0
@@ -318,21 +321,22 @@ _nextch:
     bsr     getch
     bra     _nextch                 ; [loop]
 
-_nextch16:
-    bsr     getch
-    cmpi.b  #' ',d0
-    ble     _done                   ; if char is space then break
-
+    .ifndef NOHEX
+_nextch16_1:
     lsl.w   #4,d1
     subi.w  #'0',d0
     cmpi.w  #9,d0
-    bhi     _nextch16_2
-    add.w   d0,d1
-    bra     _nextch16               ; [loop]
-_nextch16_2
+    bls     _nextch16_2
     subi.w  #39,d0
+_nextch16_2:
     add.w   d0,d1
-    bra     _nextch16               ; [loop]
+    ;; [fall-through]
+_nextch16:
+    bsr     getch
+    cmp.b   d4,d0
+    bgt     _nextch16_1             ; if char is space then break
+    ;; [fall-through]
+    .endif
 
 _done:
     cmpi.w  #$2f2f,d3               ; check for single-line comment "//"
@@ -364,7 +368,6 @@ getch:
     cmpi.b  #';',d0                 ; check for ';'
     beq     getch_done              ; if ';' return it
 
-getch_tryagain:
     .ifdef  SCTEST
     .extrn  _source
     movea.l _source,a4
