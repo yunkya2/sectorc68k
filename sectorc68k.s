@@ -40,6 +40,7 @@ TOK_GE              equ     153
 ;;; d1: current token
 ;;; d2: flag for "tok_is_num"
 ;;; d3: flags for "tok_is_call", trailing "()"
+;;; d4: scratch register
 ;;; d5: saved token for assigned variable
 ;;; d6: function token
 ;;; d7: semi-colon buffer
@@ -48,6 +49,7 @@ TOK_GE              equ     153
 ;;; a1: codegen destination address
 ;;; a2: forward jump patch location
 ;;; a3: function address
+;;; a4: tok_next
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 _entry::
@@ -56,13 +58,14 @@ entry:
     movea.l a1,a0
     adda.l  #$18000,a0
 
+    lea.l   tok_next(pc),a4
     moveq.l #0,d7
     ;; [fall-through]
 
     ;; main loop for parsing all decls
 compile:
     ;; advance to either "int" or "void"
-    bsr     tok_next
+    jsr     (a4)
 
     ;; if "int" then skip a variable
     cmpi.w  #TOK_INT,d1
@@ -71,7 +74,7 @@ compile:
     bra     compile
 
 compile_function:                   ; parse and compile a function decl
-    bsr     tok_next                ; consume "void"
+    jsr     (a4)                    ; consume "void"
     move.w  d1,d6                   ; save function name token
     movea.l a1,a3                   ; save function address
     add.w   d1,d1                   ; (must be word aligned)
@@ -97,9 +100,9 @@ execute:
 ;;; compile statements (optionally advancing tokens beforehand)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 compile_stmts_tok_next2:
-    bsr     tok_next
+    jsr     (a4)
 compile_stmts_tok_next:
-    bsr     tok_next
+    jsr     (a4)
 compile_stmts:
     cmpi.w  #TOK_BLK_END,d1         ; if we reach '}' then return
     beq     return
@@ -118,7 +121,7 @@ compile_stmts:
 _not_call:
     cmpi.w  #TOK_ASM,d1             ; check for "asm"
     bne     _not_asm
-    bsr     tok_next                ; tok_next to get literal byte
+    jsr     (a4)                    ; tok_next to get literal byte
     move.w  d1,(a1)+                ; emit the literal
     bra     compile_stmts_tok_next2 ; loop to compile next statement
 
@@ -169,7 +172,7 @@ _not_while:
 compile_assign:
     cmpi.w  #TOK_DEREF,d1           ; check for "*(int*)"
     bne     _not_deref_store
-    bsr     tok_next                ; consume "*(int*)"
+    jsr     (a4)                    ; consume "*(int*)"
     bsr     save_var_and_compile_expr ; compile rhs first
     ;; [fall-through]
 
@@ -196,14 +199,14 @@ compile_store:
 
 save_var_and_compile_expr:
     move.w  d1,d5                   ; save dest to bp
-    bsr     tok_next                ; consume dest
+    jsr     (a4)                    ; consume dest
     ;; [fall-through]               ; fall-through will consume "=" before compiling expr
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; compile expression
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 compile_expr_tok_next:
-    bsr     tok_next
+    jsr     (a4)
 compile_expr:
     bsr     compile_unary           ; compile left-hand side
 
@@ -220,7 +223,7 @@ _check_next:
 _found:
     move.w  2(a2),-(sp)             ; load 16-bit of machine-code and save it to the stack
     move.w  #$3f00,(a1)+            ; emit "move.w d0,-(sp)"
-    bsr     tok_next                ; consume operator token
+    jsr     (a4)                    ; consume operator token
     bsr     compile_unary           ; compile right-hand side
     move.l  #$3400301f,(a1)+        ; emit "move.w d0,d2; move.w (sp)+,d0"
 
@@ -245,7 +248,7 @@ compile_unary:
     cmpi.w  #TOK_DEREF,d1           ; check for "*(int*)"
     bne     _not_deref
     ;; compile deref (load)
-    bsr     tok_next                ; consume "*(int*)"
+    jsr     (a4)                    ; consume "*(int*)"
     move.w  #$3030,-(sp)            ; code for "move.w (a0,d6.w),d0"
     bra     emit_common_ptr_op      ; [tail-call]
 
@@ -253,12 +256,12 @@ _not_deref:
     cmpi.w  #TOK_LPAREN,d1          ; check for "("
     bne     _not_paren
     bsr     compile_expr_tok_next   ; consume "(" and compile expr
-    bra     tok_next                ; [tail-call] to consume ")"
+    jmp     (a4)                    ; [tail-call] to consume ")"
 
 _not_paren:
     cmpi.w  #TOK_ADDR,d1            ; check for "&"
     bne     _not_addr
-    bsr     tok_next                ; consume "&"
+    jsr     (a4)                    ; consume "&"
     move.w  #$303c,(a1)+            ; code for "move.w #imm,d0"
     bra     emit_var                ; [tail-call] to emit code
 
@@ -274,12 +277,12 @@ _not_int:
     ;; [fall-through]
 
 emit_var:
-    add.w   d1,d1                   ; bx = 2*bx (scale up for 16-bit)
+    add.w   d1,d1                   ; d1 = 2*d1 (scale up for 16-bit)
     ;; [fall-through]
 
 emit_tok:
     move.w  d1,(a1)+                ; emit token value
-    bra     tok_next                ; [tail-call]
+    jmp     (a4)                    ; [tail-call]
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; get next token, setting the following:
@@ -288,7 +291,7 @@ emit_tok:
 ;;;   d3: tok_is_call
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 tok_next2:
-    bsr     tok_next
+    jsr     (a4)
     ;; [fall-through]
 tok_next:
     moveq.l #' ',d4
@@ -351,13 +354,13 @@ _comment_double_slash:
     bsr     getch                   ; get next char
     cmpi.b  #$0a,d0                 ; check for newline '\n'
     bne     _comment_double_slash   ; [loop]
-    bra     tok_next                ; [tail-call]
+    jmp     (a4)                    ; [tail-call]
 
 _comment_multi_line:
-    bsr     tok_next                ; get next token
+    jsr     (a4)                    ; get next token
     cmpi.w  #65475,d1               ; check for token "*/"
     bne     _comment_multi_line     ; [loop]
-    bra     tok_next                ; [tail-call]
+    jmp     (a4)                    ; [tail-call]
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; get next char: returned in ax (ah == 0, al == ch)
@@ -370,10 +373,10 @@ getch:
 
     .ifdef  SCTEST
     .extrn  _source
-    movea.l _source,a4
+    movea.l _source,a6
     moveq.l #0,d0
-    move.b  (a4)+,d0
-    move.l  a4,_source
+    move.b  (a6)+,d0
+    move.l  a6,_source
     .else
     .dc.w   $ff08                   ; DOS _GETC
     .endif
