@@ -40,23 +40,20 @@ TOK_GE              equ     153
 ;;; d1  bx: current token
 ;;; d2  dl: flag for "tok_is_num"
 ;;; d3  dh: flags for "tok_is_call", trailing "()"
-;;; d4  di: codegen destination offset
 ;;; d5  bp: saved token for assigned variable
-;;; d6  si: used with lodsw for table scans
 ;;; d7      semi-colon buffer
 ;;; sp  sp: stack pointer, we don't mess with this
 ;;; a0  ds: fn symbol table segment (occasionally set to "cs" to access binary_oper_tbl)
 ;;; a1  es: codegen destination segment
+;;; a2
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 _entry::
 entry:
     lea.l   codegen(pc),a1
-    adda.l  #$8000,a1
     movea.l a1,a0
-    adda.l  #$10000,a0
+    adda.l  #$18000,a0
 
-    move.w  #$8000,d4
     moveq.l #0,d7
   ;; [fall-through]
 
@@ -75,11 +72,11 @@ compile_function:              ; parse and compile a function decl
     bsr     tok_next            ; consume "void"
     move.w  d1,-(sp)            ; save function name token
     add.w   d1,d1               ; (must be word aligned)
-    move.w  d4,(a0,d1.w)        ; record function address in symtbl
+    move.w  a1,(a0,d1.w)        ; record function address in symtbl
+    movea.l a1,a3
     bsr     compile_stmts_tok_next2 ; compile function body
 
-    move.w  #$4e75,(a1,d4.w)    ; emit "rts" instruction
-    addq.w  #2,d4
+    move.w  #$4e75,(a1)+        ; emit "rts" instruction
 
     move.w  (sp)+,d1            ; if the function is _start(), we're done
     cmpi.w  #TOK_START,d1
@@ -87,15 +84,12 @@ compile_function:              ; parse and compile a function decl
   ;; [fall-through]
 
   ;; done compiling, execute the binary
-    .ifdef  SCTEST
-    rts
-    .else
+;    .ifdef  SCTEST
+;    rts
+;    .else
 execute:
-    add.w   d1,d1               ; (must be word aligned)
-    move.w  (a0,d1.w),d1        ; push the offset to "_start()"
-    jsr     (a1,d1.w)
+    jsr     (a3)
     .dc.w   $ff00
-    .endif
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; compile statements (optionally advancing tokens beforehand)
@@ -111,14 +105,12 @@ compile_stmts:
 
     tst.b   d3                  ; if dh is 0, it's not a call
     beq     _not_call
-    move.w  #$6100,(a1,d4.w)    ; emit "bsr" instruction
-    addq.w  #2,d4
+    move.w  #$6100,(a1)+        ; emit "bsr" instruction
 
     add.w   d1,d1               ; (must be word aligned)
     move.w  (a0,d1.w),d0        ; load function offset from symbol-table
-    sub.w   d4,d0               ; compute relative to this location: "dest - cur"
-    move.w  d0,(a1,d4.w)        ; emit target
-    addq.w  #2,d4
+    sub.w   a1,d0               ; compute relative to this location: "dest - cur"
+    move.w  d0,(a1)+            ; emit target
 
     bra     compile_stmts_tok_next2 ; loop to compile next statement
 
@@ -126,8 +118,7 @@ _not_call:
     cmpi.w  #TOK_ASM,d0         ; check for "asm"
     bne     _not_asm
     bsr     tok_next            ; tok_next to get literal byte
-    move.w  d0,(a1,d4.w)        ; emit the literal
-    addq.w  #2,d4
+    move.w  d0,(a1)+            ; emit the literal
     bra     compile_stmts_tok_next2 ; loop to compile next statement
 
 _not_asm:
@@ -139,43 +130,38 @@ _not_asm:
 _not_if:
     cmpi.w  #TOK_WHILE_BEGIN,d0 ; check for "while"
     bne     _not_while
-    move.w  d4,-(sp)            ; save loop start location
+    move.w  a1,-(sp)            ; save loop start location
     bsr     _control_flow_block ; compile control-flow block
-    bra     _patch_back         ; patch up backward and forward jumps of while-stmt
-
-_not_while:
-    bsr     compile_assign      ; handle an assignment statement
-    bra     compile_stmts       ; loop to compile next statement
+                                ; patch up backward and forward jumps of while-stmt
 
 _patch_back:
-    move.w  #$6000,(a1,d4.w)    ; emit "bra" instruction (backwards)
-    addq.w  #2,d4
+    move.w  #$6000,(a1)+        ; emit "bra" instruction (backwards)
     move.w  (sp)+,d0            ; restore loop start location
-    sub.w   d4,d0               ; compute relative to this location: "dest - cur"
-    move.w  d0,(a1,d4.w)        ; emit target
-    addq.w  #2,d4
+    sub.w   a1,d0               ; compute relative to this location: "dest - cur"
+    move.w  d0,(a1)+            ; emit target
   ;; [fall-through]
 _patch_fwd:
-    move.w  d4,d0               ; compute relative fwd jump to this location: "dest - src"
-    sub.w   d6,d0
-    addq.w  #2,d0
-    move.w  d0,-2(a1,d6.w)      ; patch "src - 2"
+    move.w  a1,d0               ; compute relative fwd jump to this location: "dest - src"
+    sub.w   a2,d0
+    move.w  d0,(a2)             ; patch "src - 2"
     bra     compile_stmts_tok_next  ; loop to compile next statement
 
 _control_flow_block:
     bsr     compile_expr_tok_next   ; compile loop or if condition expr
 
   ;; emit forward jump
-    move.l  #$4a406700,(a1,d4.w)    ; emit "tst.w d0; beq xxxx"
-    addq.w  #6,d4               ; emit placeholder for target
-
-    move.w  d4,-(sp)            ; save forward patch location
+    move.l  #$4a406700,(a1)+    ; emit "tst.w d0; beq xxxx"
+    move.l  a1,-(sp)            ; save forward patch location
+    addq.l  #2,a1               ; emit placeholder for target
     bsr     compile_stmts_tok_next  ; compile a block of statements
-    move.w  (sp)+,d6            ; restore forward patch location
+    move.l  (sp)+,a2            ; restore forward patch location
 
 return:                         ; this label gives us a way to do conditional returns
     rts                         ; (e.g. "jne return")
 
+_not_while:
+    bsr     compile_assign      ; handle an assignment statement
+    bra     compile_stmts       ; loop to compile next statement
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; compile assignment statement
@@ -196,9 +182,8 @@ emit_common_ptr_op:
     move.w  d0,-(sp)
     move.w  #$3c28,d0           ; emit "move.w imm(a0),d6"
     bsr     emit_var
-    move.w  (sp)+,(a1,d4.w)     ; emit
-    move.w  #$6000,2(a1,d4.w)   ; emit
-    addq.w  #4,d4
+    move.w  (sp)+,(a1)+         ; emit
+    move.w  #$6000,(a1)+        ; emit
     rts
 
 _not_deref_store:
@@ -235,27 +220,23 @@ _check_next:
 
 _found:
     move.w  2(a2),-(sp)         ; load 16-bit of machine-code and save it to the stack
-    move.w  #$3f00,(a1,d4.w)    ; emit "move.w d0,-(sp)"
-    addq.w  #2,d4
+    move.w  #$3f00,(a1)+        ; emit "move.w d0,-(sp)"
     bsr     tok_next            ; consume operator token
     bsr     compile_unary       ; compile right-hand side
-    move.l  #$3400301f,(a1,d4.w)    ; emit "move.w d0,d2; move.w (sp)+,d0"
-    addq.w  #4,d4
+    move.l  #$3400301f,(a1)+    ; emit "move.w d0,d2; move.w (sp)+,d0"
 
     move.w  (sp)+,d1            ; restore 16-bit of machine-code
     cmpi.b  #$c0,d1             ; detect the special case for comparison ops
     bne     emit_op             
 emit_cmp_op:
-    move.w  #$b042,(a1,d4.w)    ; emit "cmp.w d2,d0"
-    move.w  d1,2(a1,d4.w)       ; emit machine code for op
-    move.w  #$0240,4(a1,d4.w)   ; emit "andi.w #imm,d0"
-    addq.w  #6,d4
+    move.w  #$b042,(a1)+        ; emit "cmp.w d2,d0"
+    move.w  d1,(a1)+            ; emit machine code for op
+    move.w  #$0240,(a1)+        ; emit "andi.w #imm,d0"
     moveq.l #1,d1               ; imm = 1
   ;; [fall-through]
 
 emit_op:
-    move.w  d1,(a1,d4.w)        ; emit machine code for op
-    addq.w  #2,d4
+    move.w  d1,(a1)+            ; emit machine code for op
     rts
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -285,9 +266,8 @@ _not_paren:
 _not_addr:
     tst.b   d2                  ; check for tok_is_num
     beq     _not_int
-    move.w  #$303c,(a1,d4.w)    ; emit "move.w #imm,d0"
-    addq.w  #2,d4
-    bra     emit_tok                  ; [tail-call] to emit imm
+    move.w  #$303c,(a1)+        ; emit "move.w #imm,d0"
+    bra     emit_tok            ; [tail-call] to emit imm
 
 _not_int:
   ;; compile var
@@ -295,14 +275,12 @@ _not_int:
   ;; [fall-through]
 
 emit_var:
-    move.w  d0,(a1,d4.w)        ; emit
-    addq.w  #2,d4
+    move.w  d0,(a1)+            ; emit
     add.w   d1,d1               ; bx = 2*bx (scale up for 16-bit)
   ;; [fall-through]
 
 emit_tok:
-    move.w  d1,(a1,d4.w)        ; emit token value
-    addq.w  #2,d4
+    move.w  d1,(a1)+            ; emit token value
     bra     tok_next            ; [tail-call]
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
