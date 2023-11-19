@@ -36,16 +36,17 @@ TOK_GE              equ     153
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Common register uses
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; d0  ax: current token / scratch register / emit val for stosw
-;;; d1  bx: current token
-;;; d2  dl: flag for "tok_is_num"
-;;; d3  dh: flags for "tok_is_call", trailing "()"
+;;; d0: scratch register
+;;; d1: current token
+;;; d2: flag for "tok_is_num"
+;;; d3: flags for "tok_is_call", trailing "()"
 ;;; d5  bp: saved token for assigned variable
 ;;; d7      semi-colon buffer
 ;;; sp  sp: stack pointer, we don't mess with this
 ;;; a0  ds: fn symbol table segment (occasionally set to "cs" to access binary_oper_tbl)
 ;;; a1  es: codegen destination segment
 ;;; a2
+;;; a3: function address
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 _entry::
@@ -63,33 +64,34 @@ compile:
     bsr     tok_next
 
   ;; if "int" then skip a variable
-    cmpi.w  #TOK_INT,d0
+    cmpi.w  #TOK_INT,d1
     bne     compile_function
-    bsr     tok_next2           ; consume "int" and <ident>
+    bsr     tok_next2               ; consume "int" and <ident>
     bra     compile
 
-compile_function:              ; parse and compile a function decl
-    bsr     tok_next            ; consume "void"
-    move.w  d1,-(sp)            ; save function name token
-    add.w   d1,d1               ; (must be word aligned)
-    move.w  a1,(a0,d1.w)        ; record function address in symtbl
-    movea.l a1,a3
+compile_function:                   ; parse and compile a function decl
+    bsr     tok_next                ; consume "void"
+    move.w  d1,-(sp)                ; save function name token
+    add.w   d1,d1                   ; (must be word aligned)
+    move.w  a1,(a0,d1.w)            ; record function address in symtbl
+    movea.l a1,a3                   ; save function address
+
     bsr     compile_stmts_tok_next2 ; compile function body
+    move.w  #$4e75,(a1)+            ; emit "rts" instruction
 
-    move.w  #$4e75,(a1)+        ; emit "rts" instruction
-
-    move.w  (sp)+,d1            ; if the function is _start(), we're done
+    move.w  (sp)+,d1                ; if the function is _start(), we're done
     cmpi.w  #TOK_START,d1
-    bne     compile             ; otherwise, loop and compile another declaration
+    bne     compile                 ; otherwise, loop and compile another declaration
   ;; [fall-through]
 
   ;; done compiling, execute the binary
-;    .ifdef  SCTEST
-;    rts
-;    .else
 execute:
+    .ifdef  SCTEST
+    rts
+    .else
     jsr     (a3)
     .dc.w   $ff00
+    .endif
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; compile statements (optionally advancing tokens beforehand)
@@ -99,8 +101,7 @@ compile_stmts_tok_next2:
 compile_stmts_tok_next:
     bsr     tok_next
 compile_stmts:
-    move.w  d1,d0
-    cmpi.w  #TOK_BLK_END,d0     ; if we reach '}' then return
+    cmpi.w  #TOK_BLK_END,d1     ; if we reach '}' then return
     beq     return
 
     tst.b   d3                  ; if dh is 0, it's not a call
@@ -115,20 +116,20 @@ compile_stmts:
     bra     compile_stmts_tok_next2 ; loop to compile next statement
 
 _not_call:
-    cmpi.w  #TOK_ASM,d0         ; check for "asm"
+    cmpi.w  #TOK_ASM,d1         ; check for "asm"
     bne     _not_asm
     bsr     tok_next            ; tok_next to get literal byte
-    move.w  d0,(a1)+            ; emit the literal
+    move.w  d1,(a1)+            ; emit the literal
     bra     compile_stmts_tok_next2 ; loop to compile next statement
 
 _not_asm:
-    cmpi.w  #TOK_IF_BEGIN,d0    ; check for "if"
+    cmpi.w  #TOK_IF_BEGIN,d1    ; check for "if"
     bne     _not_if
     bsr     _control_flow_block ; compile control-flow block
     bra     _patch_fwd          ; patch up forward jump of if-stmt
 
 _not_if:
-    cmpi.w  #TOK_WHILE_BEGIN,d0 ; check for "while"
+    cmpi.w  #TOK_WHILE_BEGIN,d1 ; check for "while"
     bne     _not_while
     move.w  a1,-(sp)            ; save loop start location
     bsr     _control_flow_block ; compile control-flow block
@@ -167,7 +168,7 @@ _not_while:
 ;;; compile assignment statement
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 compile_assign:
-    cmpi.w  #TOK_DEREF,d0       ; check for "*(int*)"
+    cmpi.w  #TOK_DEREF,d1       ; check for "*(int*)"
     bne     _not_deref_store
     bsr     tok_next            ; consome "*(int*)"
     bsr     save_var_and_compile_expr ; compile rhs first
@@ -243,7 +244,7 @@ emit_op:
 ;;; compile unary
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 compile_unary:
-    cmpi.w  #TOK_DEREF,d0       ; check for "*(int*)"
+    cmpi.w  #TOK_DEREF,d1       ; check for "*(int*)"
     bne     _not_deref
   ;; compile deref (load)
     bsr     tok_next            ; consume "*(int*)"
@@ -251,13 +252,13 @@ compile_unary:
     bra     emit_common_ptr_op  ; [tail-call]
 
 _not_deref:
-    cmpi.w  #TOK_LPAREN,d0      ; check for "("
+    cmpi.w  #TOK_LPAREN,d1      ; check for "("
     bne     _not_paren
     bsr     compile_expr_tok_next   ; consume "(" and compile expr
     bra     tok_next            ; [tail-call] to consume ")"
 
 _not_paren:
-    cmpi.w  #TOK_ADDR,d0        ; check for "&"
+    cmpi.w  #TOK_ADDR,d1        ; check for "&"
     bne     _not_addr
     bsr     tok_next            ; consume "&"
     move.w  #$303c,d0           ; code for "move.w #imm,d0"
@@ -285,10 +286,9 @@ emit_tok:
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; get next token, setting the following:
-;;;   ax: token             d0
-;;;   bx: token             d1
-;;;   dl: tok_is_num        d2
-;;;   dh: tok_is_call       d3
+;;;   d1: token
+;;;   d2: tok_is_num
+;;;   d3: tok_is_call
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 tok_next2:
     bsr     tok_next
@@ -302,7 +302,7 @@ tok_next:
     moveq.l #0,d3               ; zero last-two chars reg
 
     cmpi.b  #'9',d0
-    sle.b   d2                  ; tok_is_num = (al <= '9')
+    sle.b   d2                  ; tok_is_num = (d0 <= '9')
 
 _nextch:
     cmpi.b  #' ',d0
@@ -338,15 +338,12 @@ _nextch16_2
     bra     _nextch16           ; [loop]
 
 _done:
-    move.w  d3,d0
-    cmpi.w  #$2f2f,d0           ; check for single-line comment "//"
+    cmpi.w  #$2f2f,d3           ; check for single-line comment "//"
     beq     _comment_double_slash
-    cmpi.w  #$2f2a,d0           ; check for multi-line comment "/*"
+    cmpi.w  #$2f2a,d3           ; check for multi-line comment "/*"
     beq     _comment_multi_line
-    cmpi.w  #$2829,d0           ; check for call parens "()"
+    cmpi.w  #$2829,d3           ; check for call parens "()"
     seq.b   d3
-
-    move.w  d1,d0               ; return token in d0 also
     rts
 
 _comment_double_slash:
@@ -357,7 +354,7 @@ _comment_double_slash:
 
 _comment_multi_line:
     bsr     tok_next            ; get next token
-    cmpi.w  #65475,d0           ; check for token "*/"
+    cmpi.w  #65475,d1           ; check for token "*/"
     bne     _comment_multi_line ; [loop]
     bra     tok_next            ; [tail-call]
 
