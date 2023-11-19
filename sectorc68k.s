@@ -363,13 +363,12 @@ _comment_multi_line:
     jmp     (a4)                    ; [tail-call]
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; get next char: returned in ax (ah == 0, al == ch)
+;;; get next char: returned in d0
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 getch:
-    move.b  d7,d0                   ; load the semi-colon buffer
-    eor.b   d0,d7                   ; zero the buffer
-    cmpi.b  #';',d0                 ; check for ';'
-    beq     getch_done              ; if ';' return it
+    moveq.l #0,d0
+    tst.b   d7                      ; test the semi-colon buffer
+    bne     getch_done1
 
     .ifdef  SCTEST
     .extrn  _source
@@ -383,9 +382,9 @@ getch:
 
     cmpi.b  #';',d0                 ; check for ';'
     bne     getch_done              ; if not ';' return it
-    move.b  d0,d7                   ; save the ';'
-    moveq.l #0,d0                   ; return 0 instead, treated as whitespace
 
+getch_done1:
+    exg.l   d0,d7                   ; save the ';' and return 0 instead, treated as whitespace
 getch_done:
     rts
 
