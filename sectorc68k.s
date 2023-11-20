@@ -70,7 +70,8 @@ compile:
     ;; if "int" then skip a variable
     cmpi.w  #TOK_INT,d1
     bne     compile_function
-    bsr     tok_next2               ; consume "int" and <ident>
+    jsr     (a4)                    ; consume "int" and <ident>
+    jsr     (a4)
     bra     compile
 
 compile_function:                   ; parse and compile a function decl
@@ -93,12 +94,20 @@ execute:
     rts
     .else
     jsr     (a3)
-    .dc.w   $ff00
+    .dc.w   $ff00                   ; DOS _EXIT
     .endif
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; compile statements (optionally advancing tokens beforehand)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+_do_call:
+    move.w  #$6100,(a1)+            ; emit "bsr" instruction
+    add.w   d1,d1                   ; (must be word aligned)
+    move.w  (a0,d1.w),d0            ; load function offset from symbol-table
+    sub.w   a1,d0                   ; compute relative to this location: "dest - cur"
+    move.w  d0,(a1)+                ; emit target
+    ;; [fall-through]
+
 compile_stmts_tok_next2:
     jsr     (a4)
 compile_stmts_tok_next:
@@ -108,17 +117,8 @@ compile_stmts:
     beq     return
 
     tst.b   d3                      ; if d3 is 0, it's not a call
-    beq     _not_call
-    move.w  #$6100,(a1)+            ; emit "bsr" instruction
+    bne     _do_call
 
-    add.w   d1,d1                   ; (must be word aligned)
-    move.w  (a0,d1.w),d0            ; load function offset from symbol-table
-    sub.w   a1,d0                   ; compute relative to this location: "dest - cur"
-    move.w  d0,(a1)+                ; emit target
-
-    bra     compile_stmts_tok_next2 ; loop to compile next statement
-
-_not_call:
     cmpi.w  #TOK_ASM,d1             ; check for "asm"
     bne     _not_asm
     jsr     (a4)                    ; tok_next to get literal byte
@@ -280,7 +280,7 @@ emit_var:
 
 emit_tok:
     move.w  d1,(a1)+                ; emit token value
-    jmp     (a4)                    ; [tail-call]
+    ;; [fall-through]
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; get next token, setting the following:
@@ -288,9 +288,6 @@ emit_tok:
 ;;;   d2: tok_is_num
 ;;;   d3: tok_is_call
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-tok_next2:
-    jsr     (a4)
-    ;; [fall-through]
 tok_next:
     moveq.l #' ',d4
     bsr     getch
