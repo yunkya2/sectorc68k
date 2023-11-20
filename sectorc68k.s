@@ -44,12 +44,13 @@ TOK_GE              equ     153
 ;;; d5: saved token for assigned variable
 ;;; d6: function token
 ;;; d7: semi-colon buffer
-;;; sp: stack pointer, we don't mess with this
 ;;; a0: fn symbol table base address
 ;;; a1: codegen destination address
 ;;; a2: forward jump patch location
 ;;; a3: function address
 ;;; a4: tok_next
+;;; (a6: used for debug)
+;;; sp: stack pointer, we don't mess with this
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 _entry::
@@ -169,6 +170,12 @@ _not_while:
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; compile assignment statement
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+_do_deref:
+    ;; compile deref (load)
+    jsr     (a4)                    ; consume "*(int*)"
+    move.w  #$3030,-(sp)            ; code for "move.w (a0,d6.w),d0"
+    bra     emit_common_ptr_op      ; [tail-call]
+
 compile_assign:
     cmpi.w  #TOK_DEREF,d1           ; check for "*(int*)"
     bne     _not_deref_store
@@ -244,13 +251,8 @@ _not_found:
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 compile_unary:
     cmpi.w  #TOK_DEREF,d1           ; check for "*(int*)"
-    bne     _not_deref
-    ;; compile deref (load)
-    jsr     (a4)                    ; consume "*(int*)"
-    move.w  #$3030,-(sp)            ; code for "move.w (a0,d6.w),d0"
-    bra     emit_common_ptr_op      ; [tail-call]
+    beq     _do_deref
 
-_not_deref:
     cmpi.w  #TOK_LPAREN,d1          ; check for "("
     bne     _not_paren
     bsr     compile_expr_tok_next   ; consume "(" and compile expr
